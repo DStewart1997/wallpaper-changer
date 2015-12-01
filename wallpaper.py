@@ -1,98 +1,118 @@
-import ctypes, praw, urllib.request, zipfile, os, getpass, imghdr
-from PIL import Image
+#!/usr/bin/env python3
+
+"""
+Wallpaper switcher using subreddits.
+
+Source code: https://github.com/DStewart1997/wallpaper-changer
+"""
+
+import getpass
+import imghdr
+import os
 from sys import platform
-
-# ToDo: Add argparse to set no. of images, which subreddit and which resolution.
-#   Set wallpaper to change for each platform and each DE.
-
-if platform == 'linux':
-    username = getpass.getuser()
-    imagedir = '/home/' + username + '/Downloads/'
-    tmpdir = '/home/' + username + '/Downloads/tmp/'
-elif platform == 'win32':
-    username = getpass.getuser()
-    imagedir = 'C:\\Users\\' + username + '\\Pictures\\wp_switcher\\'
-    tmpdir = 'C:\\Users\\' + username + '\\Pictures\\wp_switcher\\tmp\\'
+import urllib.request
+import praw
+import zipfile
 
 
-# If paths do not exist - make them.
-if not os.path.exists(imagedir):
-        os.makedirs(imagedir)
-if not os.path.exists(tmpdir):
-        os.makedirs(tmpdir)
+class FileMgmt(object):
+    """Sets file paths and creates non-existant paths."""
+
+    def __init__(self):
+        """Sets the paths depending on operating system and creates them if
+        they don't exist."""
+        username = getpass.getuser()
+
+        if platform == 'linux':
+            self.imagedir = '/home/' + username + '/Pictures/wp_switcher/'
+            self.tmpdir = '/home/' + username + '/Downloads/tmp/'
+        elif platform == 'win32':
+            self.imagedir = 'C:\\Users\\' + username + \
+                '\\Pictures\\wp_switcher\\'
+            self.tmpdir = 'C:\\Users\\' + username + '\\Downloads\\tmp\\'
+
+        # If paths do not exist - make them.
+        if not os.path.exists(self.imagedir):
+            os.makedirs(self.imagedir)
+        if not os.path.exists(self.tmpdir):
+            os.makedirs(self.tmpdir)
+
+fm = FileMgmt()
 
 
-def get_image_size(image_name):
-    file = open(imagedir + image_name, 'rb')
-    img = Image.open(file)
-    img.load()
-    size = img.size
-    file.close()
+class Downloader(object):
+    """Parses various links to download images from them.
+    Currently supported is imgur (and albums) and DeviantArt."""
 
-    return size
+    def __init__(self, link):
+        self.link = link
 
-def download_album(link):
-    zip_name = "images.zip"
+    def download_imgur_album(self):
+        """Parses imgur album links.
+        Downloads the album as a zip, extracts it, then cleans up."""
 
-    urllib.request.urlretrieve(link, imagedir + zip_name)  # Download the album as a zip file
+        zip_name = "wp_images.zip"
+        urllib.request.urlretrieve(self.link + "/zip", fm.imagedir + zip_name)
 
-    zip_ref = zipfile.ZipFile(imagedir + zip_name, 'r')  # Extract the zip file
-    zip_ref.extractall(imagedir)
-    zip_ref.close()
+        zip_ref = zipfile.ZipFile(fm.imagedir + zip_name, 'r')
+        zip_ref.extractall(fm.imagedir)
+        zip_ref.close()
 
-    os.remove(imagedir + zip_name)  # Delete the remaining zip file
+        os.remove(fm.imagedir + zip_name)
 
-def download_image(link, path=imagedir):
-    image_name = link.rpartition('/')[2]
-    urllib.request.urlretrieve(link, path + image_name)
+        print("Imgur album:", self.link)
 
-    # print(get_image_size(image_name))
+    def download_imgur(self):
+        """Downloads i.imgur.com links - these links don't have file
+        extensions so we have to add one (png) then when downloaded fix the
+        extension (eg. Change it from png to jpeg)."""
 
-# Gets page source - Line 347 has the download link - seems to always be at this line no matter the image
-def download_deviantart(link):
-    response = urllib.request.urlopen(link)
-    link_line = ""
-    for line_number, line in enumerate(response):
+        image_name = self.link.rpartition('/')[2]
+        urllib.request.urlretrieve(self.link + '.png', fm.tmpdir + image_name)
 
-        if line_number == 346:  # Zero-based
-            link_line = str(line)
+        ext = imghdr.what(fm.tmpdir + image_name)  # The correct extension.
+        os.rename(fm.tmpdir + image_name, fm.imagedir +
+                  image_name.split('.')[0] + '.' + str(ext))
 
-        elif line_number > 346:
-            break
+        print("i.imgur:", self.link)
 
-    image_link = link_line.split()[3].partition('"')[-1].rpartition('"')[0]
-    image_name = image_link.rpartition('/')[-1]
-    urllib.request.urlretrieve(image_link, imagedir + image_name)
+    def download_i_imgur(self):
+        """Downloads regular imgur links."""
 
-    print(get_image_size(image_name))
+        image_name = self.link.rpartition('/')[2]
+        urllib.request.urlretrieve(self.link, fm.imagedir + image_name)
 
+        print("Regular imgur:", self.link)
 
+    def download_deviantart(self):
+        """Downloads images from DeviantArt links.
+        Gets the source code of the web page and parses line 347 to get direct
+        image link - seems to be reliable but a better method should be
+        used down the line."""
+
+        print("Deviant Art:", self.link)
+
+# Sets PRAW info.
 user_agent = "Wallpaper switcher"
 subreddit = 'minimalwallpaper'
-
 r = praw.Reddit(user_agent=user_agent)
 submissions = r.get_subreddit(subreddit).get_hot(limit=25)
 
+images = []
 for submission in submissions:
-    if "imgur.com/a" in submission.url:
-        download_album(submission.url + "/zip")  # Can append /zip to url to download zip of album
-    elif "i.imgur.com" in submission.url:
-        download_image(submission.url)
-    elif "imgur.com" in submission.url:
-        download_image(submission.url + ".png", tmpdir)  # Download separately and rename to correct extension later.
-    elif "deviantart.com" in submission.url:
-        download_deviantart(submission.url)
+    images.append(Downloader(submission.url))
+
+for img in images:
+    if "imgur.com/a" in img.link:
+        Downloader.download_imgur_album(img)
+    elif "i.imgur.com" in img.link:
+        Downloader.download_i_imgur(img)
+    elif "imgur.com" in img.link:
+        Downloader.download_imgur(img)
+    elif "deviantart.com" in img.link:
+        Downloader.download_deviantart(img)
     else:
-        print("Other: " + submission.url)  # Other image hosts and self-posts
+        print("Other:", img.link)
 
-
-# Fix files with wrong extensions. Some files are detected as 'None' type - so far only jpegs.
-for file in os.listdir(tmpdir):
-    ext = imghdr.what(tmpdir + file)
-    os.rename(tmpdir + file, imagedir + file.split('.')[0] + '.' + str(ext))
-
-
-# Set the wallpaper
-# image_path = "C:\\Bird.jpg"
-# SPI_SETDESKWALLPAPER = 20
-# ctypes.windll.user32.SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, image_path, 0)
+# Remove tmpdir.
+os.rmdir(fm.tmpdir)
